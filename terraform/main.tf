@@ -48,4 +48,9 @@ resource "azurerm_storage_account" "app" {
   }
 
   tags = local.tags
+
+  # Storage holds data: make Terraform refuse to destroy it by accident.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
