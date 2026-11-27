@@ -1,0 +1,48 @@
+name: terraform-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: fmt-validate-lint-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+
+      - name: Format check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init without a backend (no Azure access needed)
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - uses: terraform-linters/setup-tflint@v6
+
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint --format compact
+
+      - name: Security scan (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"

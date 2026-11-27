@@ -1,0 +1,7 @@
+provider "azurerm" {
+  features {}
+
+  # The pipeline identities can only touch one resource group, so they are not allowed to
+  # register Azure resource providers. Registration was done once, by an admin.
+  resource_provider_registrations = "none"
+}

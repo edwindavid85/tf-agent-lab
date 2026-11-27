@@ -1,0 +1,38 @@
+# For comparison only: roughly the same checks as .github/workflows/terraform-ci.yml,
+# written as an Azure DevOps pipeline. This file is NOT run by GitHub.
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: TerraformInstaller@1
+    inputs:
+      terraformVersion: "1.14.8"
+
+  - script: terraform fmt -check -recursive -diff
+    workingDirectory: terraform
+    displayName: Format check
+
+  - script: |
+      terraform init -backend=false -input=false
+      terraform validate
+    workingDirectory: terraform
+    displayName: Init and validate
+
+  - script: |
+      curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+      tflint --init && tflint --format compact
+    workingDirectory: terraform
+    displayName: TFLint
+
+  - script: |
+      docker run --rm -v $(Build.SourcesDirectory):/src aquasec/trivy:0.76.2 config --severity HIGH,CRITICAL --exit-code 1 /src/terraform
+    displayName: Security scan (Trivy)
