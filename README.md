@@ -7,3 +7,4 @@ Azure infrastructure in Terraform, run through GitHub Actions. Used by the GH-60
 - `docs/azure-pipelines-equivalent.yml`: the same checks as an Azure DevOps pipeline, for comparison
 
 This repository contains no secrets and must never contain any.
+- Owner: platform team
