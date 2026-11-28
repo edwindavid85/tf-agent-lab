@@ -4,8 +4,9 @@
 #
 #   bash setup-azure.sh <owner>/<repo> [location]
 #
-# Creates two resource groups, a state storage account, two app registrations (plan and apply)
-# with GitHub federated credentials, and the narrowest role assignments that work.
+# Creates two resource groups, a state storage account with an empty state file, two app
+# registrations (plan and apply) with GitHub federated credentials, and the narrowest role
+# assignments that work.
 # Safe to re-run: existing app registrations and federated credentials are reused.
 set -euo pipefail
 shopt -s inherit_errexit   # make failures inside $(...) stop the script too
@@ -40,6 +41,31 @@ echo "$STATE_SA/tfstate created"
 STATE_SCOPE="$(az storage account show -n "$STATE_SA" -g "$STATE_RG" --query id -o tsv)/blobServices/default/containers/tfstate"
 LAB_SCOPE=$(az group show -n "$LAB_RG" --query id -o tsv)
 
+echo "== 3b. An empty state file, so the read-only plan works from the very first PR"
+# Terraform creates the state file on first use, and that needs a write lock on the blob.
+# The plan identity can only read, so the admin creates the empty state once, here.
+STATE_KEY="tf-agent-lab.tfstate"
+ME=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Blob Data Contributor" --scope "$STATE_SCOPE" -o none
+blob() { az storage blob "$@" --auth-mode login --account-name "$STATE_SA" --container-name tfstate --name "$STATE_KEY"; }
+exists=""
+for _ in $(seq 1 30); do   # a new data-plane role can take a few minutes to apply
+  exists=$(blob exists --query exists -o tsv 2>/dev/null) && break
+  sleep 10
+done
+[ -n "$exists" ] || { echo "ERROR: no data access to the state container yet; re-run in a few minutes" >&2; exit 1; }
+if [ "$exists" = "false" ]; then
+  f=$(mktemp)
+  lineage=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n' | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')
+  printf '{"version":4,"terraform_version":"1.9.0","serial":0,"lineage":"%s","outputs":{},"resources":[],"check_results":null}\n' "$lineage" > "$f"
+  blob upload --file "$(cygpath -w "$f" 2>/dev/null || echo "$f")" -o none
+  rm -f "$f"
+  echo "$STATE_KEY created (empty)"
+else
+  echo "$STATE_KEY already exists"
+fi
+
 make_identity() {  # name, federated subject, workload role, state role
   local app sp
   app=$(az ad app list --display-name "$1" --query "[0].appId" -o tsv)
@@ -51,7 +77,7 @@ make_identity() {  # name, federated subject, workload role, state role
   sp=$(az ad sp show --id "$app" --query id -o tsv 2>/dev/null || az ad sp create --id "$app" --query id -o tsv)
   if [ -z "$(az ad app federated-credential list --id "$app" --query "[?subject=='$2'].name" -o tsv)" ]; then
     az ad app federated-credential create --id "$app" -o none --parameters "{
-      \"name\": \"github-$(echo "$2" | tr ':/' '--')\",
+      \"name\": \"github-$(printf '%s' "${2##*:}" | tr -c 'A-Za-z0-9-' '-')-$(printf '%s' "$2" | md5sum | cut -c1-6)\",
       \"issuer\": \"https://token.actions.githubusercontent.com\",
       \"subject\": \"$2\",
       \"audiences\": [\"api://AzureADTokenExchange\"]}"
@@ -65,8 +91,13 @@ make_identity() {  # name, federated subject, workload role, state role
 }
 
 echo "== 4. Identities: one that can only read, one that can deploy"
-PLAN_ID=$(make_identity "gh-tf-agent-lab-plan" "repo:$REPO:pull_request" "Reader" "Storage Blob Data Reader")
-APPLY_ID=$(make_identity "gh-tf-agent-lab-apply" "repo:$REPO:environment:azure" "Contributor" "Storage Blob Data Contributor")
+# Ask GitHub what its tokens will say. Newer repos use an immutable format that
+# includes numeric IDs (repo:owner@123/name@456), so never assume repo:owner/name.
+PREFIX=$(gh api "repos/$REPO/actions/oidc/customization/sub" -q '.sub_claim_prefix // empty' 2>/dev/null || true)
+PREFIX=${PREFIX:-repo:$REPO}
+echo "GitHub token subjects start with: $PREFIX"
+PLAN_ID=$(make_identity "gh-tf-agent-lab-plan" "$PREFIX:pull_request" "Reader" "Storage Blob Data Reader")
+APPLY_ID=$(make_identity "gh-tf-agent-lab-apply" "$PREFIX:environment:azure" "Contributor" "Storage Blob Data Contributor")
 
 echo "== 5. Values for GitHub repository variables (IDs, not secrets)"
 echo "AZURE_TENANT_ID=$TENANT_ID"
