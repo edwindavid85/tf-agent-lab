@@ -1,0 +1,5 @@
+# Infrastructure code and pipelines need a human owner's review.
+# The owners below use a placeholder: put your GitHub username there (or @your-org/team-name).
+/terraform/   @edwindavid85
+/.github/     @edwindavid85
+/scripts/     @edwindavid85
