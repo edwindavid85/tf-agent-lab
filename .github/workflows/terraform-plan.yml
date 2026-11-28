@@ -1,0 +1,66 @@
+name: terraform-plan
+on:
+  pull_request:   # every PR, so 'plan' can be a required check (a path filter would leave it pending forever)
+
+permissions:
+  contents: read
+  id-token: write        # lets the job ask GitHub for a short-lived OIDC token (no stored password)
+  pull-requests: write   # lets the job post the plan as a comment
+
+concurrency:
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_PLAN }}   # read-only identity
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: Init with the remote state backend
+        run: >
+          terraform init -input=false
+          -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}"
+          -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}"
+          -backend-config="container_name=tfstate"
+          -backend-config="key=tf-agent-lab.tfstate"
+
+      - name: Plan (read-only identity, so no state lock)
+        run: terraform plan -input=false -no-color -lock=false | tee plan.txt
+
+      - name: Post the plan to the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "### terraform plan"
+            echo
+            grep -E '^(Plan:|No changes)' plan.txt || true
+            echo
+            echo '<details><summary>Full plan</summary>'
+            echo
+            echo '```'
+            sed -n '/Terraform will perform/,$p' plan.txt | head -n 150
+            echo '```'
+            echo '</details>'
+          } > comment.md
+          gh pr comment "$PR_NUMBER" --body-file comment.md

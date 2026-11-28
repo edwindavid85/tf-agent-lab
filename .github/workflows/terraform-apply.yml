@@ -1,0 +1,54 @@
+name: terraform-apply
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: tf-apply
+  cancel-in-progress: false
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}  # deploy identity: only trusted from the 'azure' environment
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+
+jobs:
+  apply:
+    name: apply
+    runs-on: ubuntu-latest
+    environment: azure     # a person must approve before this job can get an Azure token
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: Init with the remote state backend
+        run: >
+          terraform init -input=false
+          -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}"
+          -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}"
+          -backend-config="container_name=tfstate"
+          -backend-config="key=tf-agent-lab.tfstate"
+
+      - name: Plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Apply exactly that plan
+        run: terraform apply -input=false -no-color tfplan
