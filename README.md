@@ -8,3 +8,4 @@ Azure infrastructure in Terraform, run through GitHub Actions. Used by the GH-60
 
 This repository contains no secrets and must never contain any.
 - Owner: platform team
+- Support: the platform-help channel
