@@ -1,0 +1,32 @@
+name: Copilot Setup Steps
+
+# Runs automatically when this file changes, so you can check it works;
+# and from the Actions tab for a manual test.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be called copilot-setup-steps, or Copilot won't pick it up.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read   # the agent gets its own token; these steps only need to read the code
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: Download providers (no backend, no Azure access)
+        run: terraform -chdir=terraform init -backend=false -input=false
+
+      - uses: terraform-linters/setup-tflint@v6
